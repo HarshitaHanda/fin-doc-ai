@@ -1,9 +1,9 @@
 import streamlit as st
 import re
-import os
-import json
+import PyPDF2
+import io
 import matplotlib.pyplot as plt
-import numpy as np
+import pandas as pd
 from collections import defaultdict
 
 # Set page config
@@ -77,51 +77,80 @@ st.markdown("""
         margin: 1rem 0;
     }
     
+    .upload-section {
+        background: #e3f2fd;
+        border-radius: 10px;
+        padding: 2rem;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    
     .stSelectbox div > div {
         background-color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Document processing class (self-contained AI)
+# Document processing class
 class FinancialDocumentAI:
     def __init__(self):
         self.financial_terms = [
             "revenue", "net income", "eps", "ebitda", "gross profit",
-            "operating income", "cash flow", "assets", "liabilities", "equity"
+            "operating income", "cash flow", "assets", "liabilities", "equity",
+            "dividend", "market share", "debt", "operating margin", "net profit"
         ]
         
         self.sentiment_words = {
             "positive": ["strong", "growth", "increase", "robust", "outperform", "gain", 
-                         "record", "expansion", "improvement", "opportunity"],
+                         "record", "expansion", "improvement", "opportunity", "upside"],
             "negative": ["challenge", "decline", "risk", "volatility", "headwind", "loss",
-                         "uncertainty", "pressure", "decrease", "weakness"]
+                         "uncertainty", "pressure", "decrease", "weakness", "threat"]
         }
+        
+        self.risk_keywords = [
+            "competition", "regulation", "cybersecurity", "litigation", 
+            "compliance", "breach", "fraud", "recession", "inflation"
+        ]
+    
+    def extract_text_from_pdf(self, uploaded_file):
+        """Extract text from uploaded PDF file"""
+        pdf_reader = PyPDF2.PdfReader(uploaded_file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        return text
     
     def extract_financial_metrics(self, text):
-        """Extract key financial metrics using rule-based NLP"""
+        """Extract key financial metrics using NLP"""
         results = {}
         
-        # Extract numbers near financial terms
-        for term in self.financial_terms:
-            pattern = r"(?i)" + re.escape(term) + r"[^\d]*([\d,\.]+)\s*(million|billion|)"
-            matches = re.findall(pattern, text)
+        # Enhanced pattern matching for financial metrics
+        patterns = {
+            "revenue": r"(revenue|sales|total income)[^\d]*([\d,\.]+)\s*(million|billion|)",
+            "net income": r"(net income|net profit|net earnings)[^\d]*([\d,\.]+)\s*(million|billion|)",
+            "eps": r"(eps|earnings per share)[^\d]*([\d,\.]+)",
+            "ebitda": r"(ebitda)[^\d]*([\d,\.]+)\s*(million|billion|)",
+            "gross profit": r"(gross profit|gross margin)[^\d]*([\d,\.]+)\s*(million|billion|)"
+        }
+        
+        for metric, pattern in patterns.items():
+            matches = re.findall(pattern, text, re.IGNORECASE)
             if matches:
                 values = []
                 for match in matches:
                     try:
-                        value = float(match[0].replace(',', ''))
-                        if "billion" in match[1].lower():
+                        value = float(match[1].replace(',', ''))
+                        if "billion" in match[2].lower():
                             value *= 1000
                         values.append(value)
                     except:
                         continue
-                results[term] = max(values) if values else None
+                results[metric] = max(values) if values else None
         
         return results
     
     def analyze_sentiment(self, text):
-        """Analyze sentiment using keyword analysis"""
+        """Analyze document sentiment"""
         positive_count = sum(text.lower().count(word) for word in self.sentiment_words["positive"])
         negative_count = sum(text.lower().count(word) for word in self.sentiment_words["negative"])
         
@@ -135,283 +164,240 @@ class FinancialDocumentAI:
             return "negative", score
         return "neutral", score
     
-    def summarize_section(self, text, section_title):
-        """Generate summary using extractive method"""
+    def identify_risk_factors(self, text):
+        """Identify and categorize risk factors"""
+        risk_categories = {
+            "Market Risks": ["competition", "market share", "demand", "pricing"],
+            "Regulatory Risks": ["regulation", "compliance", "legal", "litigation"],
+            "Operational Risks": ["supply chain", "production", "cybersecurity", "fraud"],
+            "Financial Risks": ["debt", "liquidity", "interest rates", "inflation"],
+            "Strategic Risks": ["acquisition", "innovation", "disruption", "technology"]
+        }
+        
+        risks_found = defaultdict(list)
         sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', text)
-        relevant_sentences = [
-            s for s in sentences 
-            if any(term in s.lower() for term in self.financial_terms)
-            or section_title.lower() in s.lower()
-        ]
-        return " ".join(relevant_sentences[:5])  # Return top 5 relevant sentences
-
-# Sample financial documents
-SAMPLE_DOCUMENTS = {
-    "MSFT": """
-    MICROSOFT CORPORATION
-    ANNUAL REPORT 2023
+        
+        for sentence in sentences:
+            for category, keywords in risk_categories.items():
+                if any(keyword in sentence.lower() for keyword in keywords):
+                    risks_found[category].append(sentence.strip())
+        
+        # Return top 3 risks per category
+        return {category: sentences[:3] for category, sentences in risks_found.items()}
     
-    MANAGEMENT DISCUSSION
-    We delivered strong financial results in fiscal year 2023, with revenue increasing 18% to $211 billion. 
-    Net income grew 15% to $82 billion, driven by growth in our cloud offerings. 
-    Azure revenue increased 27% year-over-year, demonstrating robust demand for our cloud infrastructure.
-    
-    Despite macroeconomic headwinds, we saw strong performance across our business segments. 
-    Our Productivity and Business Processes segment grew 13% to $69 billion, 
-    while Intelligent Cloud revenue increased 25% to $91 billion.
-    
-    RISK FACTORS
-    We face intense competition in the cloud services market from Amazon Web Services and Google Cloud. 
-    Currency fluctuations may impact our international revenue. 
-    Regulatory challenges in key markets could affect future growth.
-    
-    FINANCIAL HIGHLIGHTS
-    Revenue: $211.0 billion
-    Net Income: $82.0 billion
-    Earnings Per Share (EPS): $10.85
-    Cash Flow from Operations: $95.3 billion
-    """,
-    
-    "AAPL": """
-    APPLE INC.
-    ANNUAL REPORT 2023
-    
-    MANAGEMENT DISCUSSION
-    Apple achieved record revenue of $394 billion in fiscal 2023, driven by strong iPhone and Services growth. 
-    Net income increased to $99 billion, with EPS of $6.11. We saw particular strength in emerging markets.
-    
-    Services revenue reached an all-time high of $78 billion, growing 14% year-over-year. 
-    Wearables and Home products also performed well, generating $41 billion in revenue.
-    
-    RISK FACTORS
-    Our business depends on continued innovation in competitive markets. 
-    Global supply chain constraints could impact product availability. 
-    International trade regulations present ongoing challenges.
-    
-    FINANCIAL HIGHLIGHTS
-    Revenue: $394.3 billion
-    Net Income: $99.8 billion
-    Earnings Per Share (EPS): $6.11
-    Gross Margin: 43.3%
-    """,
-    
-    "JPM": """
-    JPMORGAN CHASE & CO.
-    ANNUAL REPORT 2023
-    
-    MANAGEMENT DISCUSSION
-    JPMorgan Chase reported solid results in 2023 with revenue of $158 billion and net income of $48 billion. 
-    Consumer Banking performed particularly well, with deposit growth of 8%. 
-    Investment Banking faced challenges due to market volatility.
-    
-    We maintained strong capital levels with CET1 ratio of 13.1%, above regulatory requirements. 
-    Credit quality remained excellent with net charge-offs of $5.7 billion.
-    
-    RISK FACTORS
-    Interest rate changes could impact net interest income. 
-    Cybersecurity threats remain a significant concern. 
-    Regulatory requirements continue to evolve and increase.
-    
-    FINANCIAL HIGHLIGHTS
-    Revenue: $158.2 billion
-    Net Income: $48.4 billion
-    Return on Equity (ROE): 15%
-    Book Value Per Share: $93.50
-    """
-}
+    def summarize_key_sections(self, text):
+        """Generate summaries for key sections"""
+        sections = {
+            "Financial Highlights": ["financial highlight", "key metric", "performance summary"],
+            "Management Discussion": ["management discussion", "executive summary", "ceo letter"],
+            "Risk Factors": ["risk factor", "risk consideration"],
+            "Future Outlook": ["outlook", "forward-looking", "future plan"]
+        }
+        
+        summaries = {}
+        for section, keywords in sections.items():
+            sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', text)
+            relevant = [s for s in sentences if any(kw in s.lower() for kw in keywords)]
+            summaries[section] = " ".join(relevant[:5]) or f"No {section} section found"
+        
+        return summaries
 
 # Initialize AI processor
 doc_ai = FinancialDocumentAI()
 
 # App header
-st.markdown('<div class="header"><h1>💼 Financial Document Intelligence System</h1><p>AI-Powered Analysis of SEC Filings and Financial Reports</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="header"><h1>💼 Financial Document Intelligence System</h1><p>AI-Powered Analysis of SEC Filings, Annual Reports, and Earnings Documents</p></div>', unsafe_allow_html=True)
 
-# Sidebar for company selection
+# Document upload section
+with st.container():
+    st.markdown('<div class="upload-section"><h3>📤 Upload Financial Document</h3></div>', unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("Choose a PDF or text file", type=["pdf", "txt"], label_visibility="collapsed")
+
+# Sidebar for document type selection
 with st.sidebar:
-    st.subheader("Document Selection")
-    company = st.selectbox("Select Company", ["MSFT", "AAPL", "JPM"], index=0)
+    st.subheader("Analysis Options")
+    doc_type = st.selectbox("Document Type", ["10-K Annual Report", "10-Q Quarterly Report", "8-K Current Report", "Earnings Release", "Investor Presentation"])
+    
+    analysis_options = st.multiselect(
+        "Analysis Focus", 
+        ["Financial Metrics", "Management Sentiment", "Risk Factors", "Peer Comparison"],
+        ["Financial Metrics", "Risk Factors"]
+    )
     
     st.divider()
     st.subheader("About This System")
     st.markdown("""
-    This AI-powered tool automates analysis of financial documents by:
-    - Extracting key financial metrics
-    - Analyzing management sentiment
-    - Summarizing critical sections
-    - Comparing peer performance
+    This AI-powered tool automates financial document analysis:
+    - Extracts key financial metrics
+    - Analyzes management sentiment
+    - Identifies risk factors
+    - Summarizes critical sections
     
-    **Technology:**
-    - Custom NLP algorithms
-    - Rule-based extraction
-    - Financial domain-specific analysis
+    **Supported Documents:**
+    - SEC filings (10-K, 10-Q, 8-K)
+    - Earnings releases
+    - Annual reports
+    - Investor presentations
     """)
     
     st.divider()
     st.caption("Built for Morgan Stanley Technology Apprenticeship Program")
 
-# Main content
-if company in SAMPLE_DOCUMENTS:
-    doc_text = SAMPLE_DOCUMENTS[company]
+# Main processing logic
+if uploaded_file is not None:
+    # Read file content
+    if uploaded_file.type == "application/pdf":
+        with st.spinner("Extracting text from PDF..."):
+            doc_text = doc_ai.extract_text_from_pdf(uploaded_file)
+    else:
+        doc_text = uploaded_file.getvalue().decode("utf-8")
+    
+    # Show document preview
+    with st.expander("Document Preview", expanded=False):
+        st.text(doc_text[:5000] + "..." if len(doc_text) > 5000 else doc_text)
     
     # Process document
-    with st.spinner("Analyzing document..."):
-        metrics = doc_ai.extract_financial_metrics(doc_text)
-        sentiment, sentiment_score = doc_ai.analyze_sentiment(doc_text)
-        summary = doc_ai.summarize_section(doc_text, "Management Discussion")
+    with st.spinner("Analyzing document. This may take 20-30 seconds..."):
+        # Perform selected analyses
+        results = {}
         
-        # Prepare comparison data
-        comparison_data = []
-        for comp, text in SAMPLE_DOCUMENTS.items():
-            comp_metrics = doc_ai.extract_financial_metrics(text)
-            comp_sentiment = doc_ai.analyze_sentiment(text)[0]
-            comparison_data.append({
-                "company": comp,
-                "revenue": comp_metrics.get("revenue", 0),
-                "net_income": comp_metrics.get("net income", 0),
-                "sentiment": comp_sentiment
-            })
+        if "Financial Metrics" in analysis_options:
+            results['metrics'] = doc_ai.extract_financial_metrics(doc_text)
+        
+        if "Management Sentiment" in analysis_options:
+            results['sentiment'], results['sentiment_score'] = doc_ai.analyze_sentiment(doc_text)
+        
+        if "Risk Factors" in analysis_options:
+            results['risks'] = doc_ai.identify_risk_factors(doc_text)
+        
+        if "Peer Comparison" in analysis_options or True:  # Always generate summaries
+            results['summaries'] = doc_ai.summarize_key_sections(doc_text)
     
-    # Display results in two columns
-    col1, col2 = st.columns([1, 1])
+    # Display results
+    st.success("Analysis Complete!")
+    st.subheader(f"Document Analysis: {uploaded_file.name}")
     
-    with col1:
-        st.subheader(f"Company Analysis: {company}")
-        
-        # Sentiment indicator
-        st.markdown(f"**Document Sentiment:**")
-        st.markdown(f'<div class="sentiment-indicator {sentiment}">{sentiment.upper()}</div>', 
-                   unsafe_allow_html=True)
-        
-        # Financial metrics
-        st.subheader("Key Financial Metrics")
-        if metrics:
-            cols = st.columns(2)
-            for i, (metric, value) in enumerate(metrics.items()):
-                with cols[i % 2]:
+    # Create tabs for different analysis sections
+    tab1, tab2, tab3, tab4 = st.tabs(["Financial Metrics", "Sentiment & Risks", "Document Summaries", "Full Report"])
+    
+    with tab1:
+        if 'metrics' in results and results['metrics']:
+            st.subheader("Key Financial Metrics")
+            cols = st.columns(3)
+            metric_count = 0
+            
+            for metric, value in results['metrics'].items():
+                with cols[metric_count % 3]:
                     if value:
                         st.markdown(f"""
                         <div class="metric-card">
-                            <div style="text-transform: capitalize;">{metric}</div>
+                            <div style="text-transform: capitalize; font-weight: bold;">{metric}</div>
                             <div class="metric-value">${value:,.1f}M</div>
                         </div>
                         """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div style="text-transform: capitalize;">{metric}</div>
-                            <div>N/A</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                metric_count += 1
         else:
             st.warning("No financial metrics found in document")
         
-        # Management summary
-        st.subheader("Management Discussion Summary")
-        st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
+        # Visualization
+        if 'metrics' in results and results['metrics']:
+            st.subheader("Financial Metrics Distribution")
+            fig, ax = plt.subplots(figsize=(10, 4))
+            metrics = list(results['metrics'].keys())
+            values = [v or 0 for v in results['metrics'].values()]
+            
+            # Only show metrics with values
+            valid_metrics = [m for m, v in zip(metrics, values) if v]
+            valid_values = [v for v in values if v]
+            
+            if valid_metrics:
+                ax.bar(valid_metrics, valid_values, color='#3498db')
+                ax.set_ylabel('Value (Millions USD)')
+                plt.xticks(rotation=45)
+                st.pyplot(fig)
     
-    with col2:
-        # Peer comparison
-        st.subheader("Peer Comparison")
+    with tab2:
+        col1, col2 = st.columns(2)
         
-        # Revenue comparison chart
-        fig, ax = plt.subplots(figsize=(10, 5))
-        companies = [d['company'] for d in comparison_data]
-        revenues = [d['revenue'] or 0 for d in comparison_data]
+        with col1:
+            if 'sentiment' in results:
+                st.subheader("Document Sentiment")
+                sentiment = results['sentiment']
+                st.markdown(f'<div class="sentiment-indicator {sentiment}">{sentiment.upper()}</div>', 
+                           unsafe_allow_html=True)
+                
+                # Sentiment meter
+                score = results.get('sentiment_score', 0)
+                st.metric("Sentiment Score", f"{score:.2f}")
+                st.progress((score + 1) / 2)
+                
+                st.markdown("**Sentiment Keywords Found**")
+                pos_count = sum(doc_text.lower().count(word) for word in doc_ai.sentiment_words["positive"])
+                neg_count = sum(doc_text.lower().count(word) for word in doc_ai.sentiment_words["negative"])
+                st.write(f"✅ Positive: {pos_count} | ❌ Negative: {neg_count}")
         
-        colors = []
-        for d in comparison_data:
-            if d['sentiment'] == 'positive': colors.append('#2ecc71')
-            elif d['sentiment'] == 'negative': colors.append('#e74c3c')
-            else: colors.append('#3498db')
-        
-        bars = ax.bar(companies, revenues, color=colors)
-        ax.set_ylabel('Revenue (Millions USD)')
-        ax.set_title('Revenue Comparison')
-        
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            ax.annotate(f'${height:,.0f}M',
-                         xy=(bar.get_x() + bar.get_width() / 2, height),
-                         xytext=(0, 3),
-                         textcoords="offset points",
-                         ha='center', va='bottom')
-        
-        st.pyplot(fig)
-        
-        # Net income chart
-        fig2, ax2 = plt.subplots(figsize=(10, 4))
-        net_incomes = [d['net_income'] or 0 for d in comparison_data]
-        ax2.plot(companies, net_incomes, marker='o', color='#9b59b6', linewidth=2)
-        ax2.set_ylabel('Net Income (Millions USD)')
-        ax2.set_title('Net Income Comparison')
-        ax2.grid(alpha=0.3)
-        
-        # Add value labels
-        for i, v in enumerate(net_incomes):
-            ax2.annotate(f'${v:,.0f}M', (i, v), textcoords="offset points", 
-                         xytext=(0,10), ha='center')
-        
-        st.pyplot(fig2)
-        
-        # Sentiment comparison
-        st.subheader("Sentiment Analysis")
-        sentiment_counts = {'positive': 0, 'neutral': 0, 'negative': 0}
-        for d in comparison_data:
-            sentiment_counts[d['sentiment']] += 1
-        
-        sentiment_labels = list(sentiment_counts.keys())
-        sentiment_values = list(sentiment_counts.values())
-        
-        fig3, ax3 = plt.subplots(figsize=(8, 3))
-        ax3.barh(sentiment_labels, sentiment_values, 
-                 color=['#2ecc71', '#3498db', '#e74c3c'])
-        ax3.set_xlim(0, max(sentiment_values) + 1)
-        ax3.set_title('Sentiment Distribution Across Companies')
-        
-        # Add value labels
-        for i, v in enumerate(sentiment_values):
-            ax3.text(v + 0.1, i, str(v), color='black', va='center')
-        
-        st.pyplot(fig3)
+        with col2:
+            if 'risks' in results and results['risks']:
+                st.subheader("Risk Factor Analysis")
+                
+                for category, risks in results['risks'].items():
+                    with st.expander(f"{category} ({len(risks)} risks)"):
+                        for i, risk in enumerate(risks):
+                            st.markdown(f"{i+1}. {risk}")
+            else:
+                st.info("No risk factors analyzed or detected")
     
-    # How it works section
-    st.divider()
-    st.subheader("How This AI System Works")
+    with tab3:
+        if 'summaries' in results:
+            for section, summary in results['summaries'].items():
+                st.subheader(section)
+                st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
     
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.markdown("""
-        ### Financial Metrics Extraction
-        - Identifies key financial terms (revenue, EPS, EBITDA)
-        - Extracts associated numerical values
-        - Converts units (millions/billions) to standard format
-        """)
-    
-    with c2:
-        st.markdown("""
-        ### Sentiment Analysis
-        - Analyzes management discussion language
-        - Scores positive/negative keywords
-        - Classifies overall document sentiment
-        """)
-    
-    with c3:
-        st.markdown("""
-        ### Peer Comparison
-        - Processes multiple documents
-        - Compares financial performance
-        - Visualizes relative positioning
-        """)
-    
-    st.markdown("""
-    This system automates what traditionally takes hours of manual financial analysis, 
-    providing Morgan Stanley analysts with instant insights from financial documents.
-    """)
-    
+    with tab4:
+        st.subheader("Comprehensive Analysis Report")
+        
+        # Create downloadable report
+        report_content = f"# Financial Document Analysis Report\n\n"
+        report_content += f"**Document:** {uploaded_file.name}\n"
+        report_content += f"**Type:** {doc_type}\n\n"
+        
+        if 'metrics' in results:
+            report_content += "## Financial Metrics\n"
+            for metric, value in results['metrics'].items():
+                report_content += f"- **{metric.capitalize()}:** ${value:,.1f}M\n"
+            report_content += "\n"
+        
+        if 'sentiment' in results:
+            report_content += f"## Sentiment Analysis\n- **Overall Sentiment:** {results['sentiment'].upper()}\n"
+            report_content += f"- **Sentiment Score:** {results.get('sentiment_score', 0):.2f}\n\n"
+        
+        if 'risks' in results:
+            report_content += "## Risk Factors\n"
+            for category, risks in results['risks'].items():
+                report_content += f"### {category}\n"
+                for risk in risks:
+                    report_content += f"- {risk}\n"
+            report_content += "\n"
+        
+        if 'summaries' in results:
+            report_content += "## Document Summaries\n"
+            for section, summary in results['summaries'].items():
+                report_content += f"### {section}\n{summary}\n\n"
+        
+        # Show and download report
+        st.download_button(
+            label="Download Full Report",
+            data=report_content,
+            file_name=f"{uploaded_file.name}_analysis_report.md",
+            mime="text/markdown"
+        )
+        
+        st.markdown(report_content)
+
 else:
-    st.error("Selected company document not found")
+    st.info("Please upload a financial document to begin analysis")
+    st.image("https://images.unsplash.com/photo-1450101499163-c8848c66ca85?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80", 
+             caption="Upload PDF annual reports, SEC filings, or earnings documents")
 
 # Add footer
 st.divider()
